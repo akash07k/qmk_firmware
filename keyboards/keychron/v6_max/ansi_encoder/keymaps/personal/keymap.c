@@ -15,7 +15,13 @@
  */
 
 #include QMK_KEYBOARD_H
+#include "deferred_exec.h"
+#include "eeconfig_kb.h"
+#include "eeprom.h"
+#include "factory_test.h"
 #include "keychron_common.h"
+#include "nvm_via.h"
+#include "via.h"
 
 enum layers {
     WIN_BASE,
@@ -26,6 +32,16 @@ enum layers {
 
 #define FN_PRIMARY MO(WIN_FN)
 #define FN_ALT     MO(WIN_FN_ALT)
+
+#define PERSONAL_SCHEMA_MARKER 0x56365001UL
+#define PERSONAL_SCHEMA_ADDRESS (EECONFIG_END_CUSTOM_RGB - sizeof(uint32_t))
+#define FIRST_INSTALL_RESET_DELAY 3500
+
+#if KEYCHRON_RGB_EEPROM_COMPAT_SIZE < 4
+#    error "The reserved RGB EEPROM span is too small for the personal schema marker"
+#endif
+
+static deferred_token first_install_reset_token = INVALID_DEFERRED_TOKEN;
 
 // clang-format off
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
@@ -70,3 +86,51 @@ const uint16_t PROGMEM encoder_map[][NUM_ENCODERS][2] = {
     [WIN_FN_ALT]   = {ENCODER_CCW_CW(KC_NO, KC_NO)},
 };
 #endif
+
+static uint32_t read_schema_marker(void) {
+    uint32_t marker;
+    eeprom_read_block(&marker, (const void *)(uintptr_t)PERSONAL_SCHEMA_ADDRESS, sizeof(marker));
+    return marker;
+}
+
+static void write_schema_marker(void) {
+    const uint32_t marker = PERSONAL_SCHEMA_MARKER;
+    eeprom_update_block(&marker, (void *)(uintptr_t)PERSONAL_SCHEMA_ADDRESS, sizeof(marker));
+}
+
+static bool schema_is_current(void) {
+    return read_schema_marker() == PERSONAL_SCHEMA_MARKER;
+}
+
+static bool via_magic_is_erased(void) {
+    uint8_t magic0;
+    uint8_t magic1;
+    uint8_t magic2;
+    nvm_via_read_magic(&magic0, &magic1, &magic2);
+    return magic0 == 0xFF || magic1 == 0xFF || magic2 == 0xFF;
+}
+
+void via_init_kb(void) {
+    if (schema_is_current() && !via_magic_is_erased()) {
+        // The schema marker, rather than QMK's build date, controls compatibility.
+        via_eeprom_set_valid(true);
+    }
+}
+
+static void reset_all_settings(void) {
+    factory_reset();
+    write_schema_marker();
+}
+
+static uint32_t reset_first_install(uint32_t trigger_time, void *cb_arg) {
+    first_install_reset_token = INVALID_DEFERRED_TOKEN;
+    reset_all_settings();
+    return 0;
+}
+
+void keyboard_post_init_user(void) {
+    if (!schema_is_current()) {
+        // The LKBT51 cannot reliably consume commands immediately after its hardware reset.
+        first_install_reset_token = defer_exec(FIRST_INSTALL_RESET_DELAY, reset_first_install, NULL);
+    }
+}
