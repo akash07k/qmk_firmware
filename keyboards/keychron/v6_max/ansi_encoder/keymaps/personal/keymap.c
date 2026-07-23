@@ -15,12 +15,17 @@
  */
 
 #include QMK_KEYBOARD_H
+#include <stdio.h>
+#include "battery.h"
 #include "deferred_exec.h"
 #include "eeconfig_kb.h"
 #include "eeprom.h"
 #include "factory_test.h"
 #include "keychron_common.h"
+#include "lpm.h"
 #include "nvm_via.h"
+#include "transport.h"
+#include "usb_util.h"
 #include "via.h"
 #include "wireless.h"
 
@@ -35,7 +40,8 @@ enum layers {
 #define FN_ALT     MO(WIN_FN_ALT)
 
 enum custom_keycodes {
-    HOLD_BOOTLOADER = SAFE_RANGE,
+    STATUS_REPORT = SAFE_RANGE,
+    HOLD_BOOTLOADER,
     HOLD_CONFIG_RESET,
     HOLD_FACTORY_RESET,
 };
@@ -48,9 +54,9 @@ enum custom_keycodes {
 #    error "The reserved RGB EEPROM span is too small for the personal schema marker"
 #endif
 
-static deferred_token bootloader_token          = INVALID_DEFERRED_TOKEN;
-static deferred_token config_reset_token        = INVALID_DEFERRED_TOKEN;
-static deferred_token factory_reset_token       = INVALID_DEFERRED_TOKEN;
+static deferred_token bootloader_token   = INVALID_DEFERRED_TOKEN;
+static deferred_token config_reset_token = INVALID_DEFERRED_TOKEN;
+static deferred_token factory_reset_token = INVALID_DEFERRED_TOKEN;
 static deferred_token first_install_reset_token = INVALID_DEFERRED_TOKEN;
 
 // clang-format off
@@ -66,7 +72,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [WIN_FN] = LAYOUT_ansi_109(
         _______,  KC_BRID,  KC_BRIU,  KC_TASK,  KC_FILE,  KC_NO,    KC_NO,    KC_MPRV,  KC_MPLY,  KC_MNXT,  KC_MUTE,   KC_VOLD,  KC_VOLU,  KC_NO,     _______,  _______,  KC_NO,     _______,  _______,  _______,  _______,
         _______,  BT_HST1,  BT_HST2,  BT_HST3,  P2P4G,    _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,   _______,  _______,  _______,   _______,  _______,  _______,  _______,
-        KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  KC_NO,    _______,  _______,  _______,  _______,  _______,   _______,  _______,  _______,   _______,  _______,  _______,
+        KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  STATUS_REPORT, _______, _______, _______, _______, _______,   _______,  _______,  _______,   _______,  _______,  _______,
         _______,  KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  _______,  _______,  _______,  _______,            _______,                                  _______,  _______,  _______,  _______,
         _______,            _______,  _______,  _______,  _______,  _______,  _______,  _______,  HOLD_BOOTLOADER, HOLD_CONFIG_RESET, HOLD_FACTORY_RESET, _______, _______,           _______,  _______,  _______,
         _______,  _______,  _______,                                _______,                                _______,  _______,   _______,  _______,   _______,  _______,  _______,  _______,            _______,  _______),
@@ -82,7 +88,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [WIN_FN_ALT] = LAYOUT_ansi_109(
         _______,  KC_BRID,  KC_BRIU,  KC_TASK,  KC_FILE,  KC_NO,    KC_NO,    KC_MPRV,  KC_MPLY,  KC_MNXT,  KC_MUTE,   KC_VOLD,  KC_VOLU,  KC_NO,     _______,  _______,  KC_NO,     _______,  _______,  _______,  _______,
         _______,  BT_HST1,  BT_HST2,  BT_HST3,  P2P4G,    _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,   _______,  _______,  _______,   _______,  _______,  _______,  _______,
-        KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  KC_NO,    _______,  _______,  _______,  _______,  _______,   _______,  _______,  _______,   _______,  _______,  _______,
+        KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  STATUS_REPORT, _______, _______, _______, _______, _______,   _______,  _______,  _______,   _______,  _______,  _______,
         _______,  KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  _______,  _______,  _______,  _______,            _______,                                  _______,  _______,  _______,  _______,
         _______,            _______,  _______,  _______,  _______,  _______,  _______,  _______,  HOLD_BOOTLOADER, HOLD_CONFIG_RESET, HOLD_FACTORY_RESET, _______, _______,           _______,  _______,  _______,
         _______,  _______,  _______,                                _______,                                _______,  _______,  _______,   _______,  _______,   _______,  _______,  _______,            _______,  _______)
@@ -167,6 +173,60 @@ void keyboard_post_init_user(void) {
     }
 }
 
+static bool status_output_ready(transport_t transport) {
+    if (transport == TRANSPORT_USB) {
+        return usb_connected_state();
+    }
+
+    return (transport & TRANSPORT_WIRELESS) && wireless_get_state() == WT_CONNECTED && !is_wireless_pin_code_entry();
+}
+
+static void send_status_report(void) {
+    transport_t transport = get_transport();
+
+    if (!status_output_ready(transport) || (get_mods() | get_weak_mods() | get_oneshot_mods()) != 0) {
+        return;
+    }
+
+    char report[144];
+    if (transport == TRANSPORT_USB) {
+        snprintf(report, sizeof(report), "Connection: USB\nBattery: unavailable\nVoltage estimate: unavailable");
+    } else {
+        char connection[24];
+        if (transport & TRANSPORT_BLUETOOTH) {
+            uint8_t host_index = wireless_get_host_index();
+            if (host_index >= 1 && host_index <= 3) {
+                snprintf(connection, sizeof(connection), "Bluetooth host %u", (unsigned)host_index);
+            } else {
+                snprintf(connection, sizeof(connection), "Bluetooth");
+            }
+        } else {
+            snprintf(connection, sizeof(connection), "2.4 GHz");
+        }
+
+        const char *battery_state = "discharging";
+#if defined(BAT_CHARGING_PIN)
+        if (usb_power_connected()) {
+            battery_state = gpio_read_pin(BAT_CHARGING_PIN) == BAT_CHARGING_LEVEL ? "charging" : "not charging";
+        }
+#endif
+
+        uint16_t voltage = battery_get_voltage();
+        snprintf(
+            report,
+            sizeof(report),
+            "Connection: %s\nBattery: %s, %u%%\nVoltage estimate: %u.%02u V",
+            connection,
+            battery_state,
+            (unsigned)battery_get_percentage(),
+            (unsigned)(voltage / 1000),
+            (unsigned)((voltage % 1000) / 10)
+        );
+    }
+
+    send_string_with_delay(report, 5);
+}
+
 static uint32_t enter_bootloader(uint32_t trigger_time, void *cb_arg) {
     bootloader_token = INVALID_DEFERRED_TOKEN;
     reset_keyboard();
@@ -187,6 +247,24 @@ static uint32_t reset_factory(uint32_t trigger_time, void *cb_arg) {
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     switch (keycode) {
+        case BT_HST1 ... BT_HST3:
+            if (record->event.pressed && get_transport() == TRANSPORT_P2P4) {
+                set_transport(TRANSPORT_BLUETOOTH);
+            }
+            return true;
+
+        case P2P4G:
+            if (record->event.pressed && get_transport() == TRANSPORT_BLUETOOTH) {
+                set_transport(TRANSPORT_P2P4);
+            }
+            return true;
+
+        case STATUS_REPORT:
+            if (record->event.pressed) {
+                send_status_report();
+            }
+            return false;
+
         case HOLD_BOOTLOADER:
             if (record->event.pressed) {
                 cancel_hold(&bootloader_token);
