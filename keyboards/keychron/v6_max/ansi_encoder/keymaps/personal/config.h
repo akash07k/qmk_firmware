@@ -1,0 +1,4 @@
+#pragma once
+
+#undef CONNECTED_IDLE_TIME
+#define CONNECTED_IDLE_TIME 600
