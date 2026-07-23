@@ -1,4 +1,5 @@
 ifeq ($(strip $(KEYMAP)), personal)
+    # See keymaps/personal/readme.md before changing this keymap-local filtering.
     PERSONAL_RGB_DIR := $(TOP_DIR)/keyboards/keychron/common/rgb
 
     PERSONAL_SRC_SNAPSHOT := $(filter-out $(PERSONAL_RGB_DIR)/%,$(SRC))

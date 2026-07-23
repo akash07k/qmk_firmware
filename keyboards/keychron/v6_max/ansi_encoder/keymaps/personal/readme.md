@@ -4,6 +4,154 @@ This is an RGB-free ANSI keymap for the Keychron V6 Max with an encoder. It
 prioritizes accessibility, wireless battery life, safe reset actions, VIA
 support, and compatibility with the stock Keychron EEPROM layout.
 
+## Design decisions and maintenance invariants
+
+This section explains choices that can otherwise look accidental. Read it
+before simplifying the build rules, EEPROM layout, VIA initialization, or reset
+sequence.
+
+### Keep the RGB-free build local
+
+Keychron adds proprietary RGB sources and definitions before keymap rules are
+processed. Disabling `RGB_MATRIX_ENABLE` in `rules.mk` alone does not remove all
+of those sources or their references.
+
+The board-level `post_rules.mk` filters Keychron RGB sources, definitions, and
+include paths only when `KEYMAP=personal`. This keeps unrelated keyboards and
+the stock V6 Max keymap unchanged.
+
+Two earlier approaches were rejected:
+
+- A keymap-level `SRC :=` assignment forced QMK's recursively evaluated source
+  list too early. Later Quantum, ChibiOS startup, and bootloader sources were
+  omitted, causing linker failures.
+- Reordering global libraries in `builddefs/build_keyboard.mk` hid that local
+  Make error but could change static-library resolution for every QMK
+  keyboard.
+
+Do not reintroduce either approach. The global build rules should remain
+upstream-compatible.
+
+### Preserve the stock EEPROM layout
+
+Stock Keychron RGB firmware reserves 518 bytes before wireless and VIA data.
+Removing that block without compensation shifts every later address. Existing
+wireless settings and VIA mappings would then be read from the wrong locations.
+
+`KEYCHRON_RGB_EEPROM_COMPAT_SIZE=518` reserves the same span without compiling
+RGB. The personal schema marker uses the final four bytes of that reserved
+span. Do not shrink the reservation or move the marker without a deliberate
+migration.
+
+The schema version is the compatibility boundary:
+
+- A matching marker means a routine personal-firmware update should preserve
+  VIA mappings, wireless settings, and pairings.
+- A missing or changed marker means the EEPROM format or reset policy changed,
+  so first-install initialization runs.
+- A schema change must update `PERSONAL_SCHEMA_MARKER`. Do not bump it for an
+  ordinary code-only release because doing so intentionally triggers a full
+  reset.
+
+Returning to stock RGB firmware can overwrite the marker. This is intentional:
+the next personal-firmware installation then receives a clean migration.
+
+### Preserve VIA mappings without insecure telemetry
+
+VIA normally uses the firmware build date as EEPROM magic. A new build date can
+therefore reset otherwise compatible VIA mappings.
+
+When the personal schema marker matches and VIA's stored magic bytes are intact,
+`via_init_kb()` deliberately marks the current VIA date magic valid before QMK
+performs its normal validity check. The schema marker is the stronger
+compatibility decision for this keymap. Erased or partially erased VIA magic is
+left invalid so QMK can initialize mappings, macros, and layout options safely.
+Removing this migration as an apparent upstream-style cleanup would make
+routine builds lose VIA mappings unless it is replaced with another strategy.
+
+`VIA_INSECURE` is intentionally removed. VIA keymaps, macros, layout
+options, and encoder remapping remain available, but unauthenticated live
+matrix-row telemetry is not exposed over raw HID.
+
+### Wait for the wireless module before factory reset
+
+`keychron_common_init()` resets and initializes the LKBT51 wireless module
+before `keyboard_post_init_user()` runs. Sending a factory-reset command
+immediately afterward proved unreliable on hardware.
+
+First-install reset is deferred for 3.5 seconds. This passes the LKBT51
+three-second startup window and lets its wake sequence complete before the
+command is sent. Do not shorten this to an immediate call without new hardware
+evidence.
+
+`P2P4G_CELAR_MASK` is `0x03`: bit 0 clears USB-A receiver pairing and bit 1
+clears USB-C receiver pairing. Using only `0x01` or `0x02` leaves one receiver
+type paired. USB-A clearing and re-pairing have been confirmed on hardware.
+
+Fn+Period resets QMK, VIA, and wireless configuration but deliberately does not
+send the module factory-reset command, so pairings survive. Fn+Slash and
+first-install initialization call Keychron's full `factory_reset()` and then
+rewrite only the schema marker.
+
+Both manual reset paths cancel a pending first-install reset before changing
+settings, preventing a delayed full reset from following a manual reset.
+
+### Shared no-RGB guards are intentional
+
+The shared Keychron changes are narrow compile-time guards, not unrelated
+refactoring. They prevent RGB-only raw HID, animation, indicator, low-power,
+and backlight calls from being compiled when neither LED Matrix nor RGB Matrix
+exists. `wireless_get_host_index()` is exposed so the typed status report can
+identify Bluetooth hosts without duplicating wireless state.
+
+Do not replace missing RGB functions with empty global stubs. The guards keep
+the feature model accurate and avoid affecting RGB-enabled keyboards.
+
+### Status output is typed for accessibility
+
+With RGB removed and no display available, Fn+I reports state by typing into the
+focused application. It refuses to type while disconnected, during Bluetooth
+PIN entry, or while any modifier is active. These checks reduce the chance of
+injecting status text into a shortcut or command.
+
+USB reports battery and voltage as unavailable because the wireless ADC values
+are cached and can be misleading while USB is selected. Wireless reports use
+the cached estimate and may be delivered gradually over Bluetooth.
+
+### Destructive actions require holds
+
+Bootloader entry and both reset actions use deferred callbacks so releasing a
+key before its threshold cancels the action. Execution is intentionally silent
+because no reliable non-RGB indicator exists. Do not replace the holds with
+immediate keypress actions.
+
+### Wireless shortcuts may override wireless mode
+
+The connection switch chooses the transport at startup and whenever the switch
+is moved. While either wireless transport is active, Fn+1 through Fn+3 can
+switch from 2.4 GHz to Bluetooth, and Fn+4 can switch back to 2.4 GHz. The
+override is temporary and is not written to EEPROM.
+
+USB remains authoritative: wireless shortcuts do not change transport while the
+connection switch is in the USB position. This prevents an accidental Fn chord
+from disconnecting a wired session.
+
+### Required checks after maintenance
+
+Changes to shared Keychron guards, EEPROM offsets, build filtering, or reset
+logic should compile both targets:
+
+```bash
+qmk compile -kb keychron/v6_max/ansi_encoder -km personal
+```
+
+```bash
+qmk compile -kb keychron/v6_max/ansi_encoder -km keychron
+```
+
+Changes to schema, VIA initialization, or factory reset also require hardware
+checks for pairing erasure, same-schema persistence, and status output.
+
 ## Physical layout changes
 
 Both positions of the operating-system switch use the same Windows-style
