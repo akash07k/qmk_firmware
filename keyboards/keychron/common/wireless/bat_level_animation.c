@@ -106,10 +106,11 @@ void bat_level_animiation_start(uint8_t percentage) {
 }
 
 void bat_level_animiation_stop(void) {
-#if !defined(LED_MATRIX_ENABLE) && !defined(RGB_MATRIX_ENABLE)
-    pin_t bat_lvl_led_pin_list[INDICATOR_LED_COUNT] = INDICATOR_LED_PINS;
-    for (uint8_t i = 0; i < INDICATOR_LED_COUNT; i++) {
-        gpio_write_pin(bat_lvl_led_pin_list[i], !INDICATORS_LED_PIN_ON_STATE);
+#if !defined(LED_MATRIX_ENABLE) && !defined(RGB_MATRIX_ENABLE) && defined(INDICATOR_LED_PINS)
+    pin_t   bat_lvl_led_pin_list[] = INDICATOR_LED_PINS;
+    uint8_t led_cnt                = sizeof(bat_lvl_led_pin_list) / sizeof(bat_lvl_led_pin_list[0]);
+    for (uint8_t i = 0; i < led_cnt; i++) {
+        gpio_write_pin(bat_lvl_led_pin_list[i], !LED_PIN_ON_STATE);
     }
 #endif
     animation_state = BAT_LVL_ANI_NONE;

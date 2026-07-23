@@ -59,6 +59,9 @@
 #if defined(KEYCHRON_RGB_ENABLE) && defined(RGB_MATRIX_ENABLE)
 #    include "eeconfig_custom_rgb.h"
 #    define __EECONFIG_SIZE_CUSTOM_RGB EECONFIG_SIZE_CUSTOM_RGB
+#elif defined(KEYCHRON_RGB_EEPROM_COMPAT_SIZE)
+// Keep downstream wireless and VIA addresses stable when a keymap omits Keychron RGB.
+#    define __EECONFIG_SIZE_CUSTOM_RGB KEYCHRON_RGB_EEPROM_COMPAT_SIZE
 #else
 #    define __EECONFIG_SIZE_CUSTOM_RGB 0
 #endif
