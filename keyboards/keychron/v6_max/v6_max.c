@@ -54,6 +54,13 @@ void keychron_task_kb(void) {
 
 #ifdef LK_WIRELESS_ENABLE
 bool lpm_is_kb_idle(void) {
-    return power_on_indicator_timer == 0 && !backlight_indicator_is_active();
+    if (power_on_indicator_timer != 0) {
+        return false;
+    }
+#if defined(LED_MATRIX_ENABLE) || defined(RGB_MATRIX_ENABLE)
+    return !backlight_indicator_is_active();
+#else
+    return true;
+#endif
 }
 #endif

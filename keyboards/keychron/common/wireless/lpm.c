@@ -32,6 +32,7 @@
 #include "lpm.h"
 #include "transport.h"
 #include "battery.h"
+#include "bat_level_animation.h"
 #include "report_buffer.h"
 #include "keychron_common.h"
 
@@ -276,17 +277,17 @@ __attribute__((weak)) void lpm_wakeup(void) {
     debounce_free();
     matrix_init();
 
-#ifdef ENABLE_RGB_MATRIX_PIXEL_RAIN
+#if defined(RGB_MATRIX_ENABLE) && defined(ENABLE_RGB_MATRIX_PIXEL_RAIN)
     extern void PIXEL_RAIN_init(void);
     PIXEL_RAIN_init();
 #endif
 
-#ifdef ENABLE_RGB_MATRIX_PIXEL_FLOW
+#if defined(RGB_MATRIX_ENABLE) && defined(ENABLE_RGB_MATRIX_PIXEL_FLOW)
     extern void PIXEL_FLOW_init(void);
     PIXEL_FLOW_init();
 #endif
 
-#ifdef ENABLE_RGB_MATRIX_PIXEL_FRACTAL
+#if defined(RGB_MATRIX_ENABLE) && defined(ENABLE_RGB_MATRIX_PIXEL_FRACTAL)
     extern void PIXEL_FRACTAL_init(void);
     PIXEL_FRACTAL_init();
 #endif

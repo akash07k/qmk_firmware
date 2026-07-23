@@ -594,13 +594,15 @@ void indicator_battery_low(void) {
 #    if defined(BAT_LOW_LED_PIN)
                 gpio_write_pin(BAT_LOW_LED_PIN, !BAT_LOW_LED_PIN_ON_STATE);
 #    endif
+#    if defined(LED_MATRIX_ENABLE) || defined(RGB_MATRIX_ENABLE)
                 if (!indicator_config.value
-#    if defined(NUM_LOCK_INDEX) || defined(CAPS_LOCK_INDEX) || defined(SCROLL_LOCK_INDEX) || defined(COMPOSE_LOCK_INDEX) || defined(KANA_LOCK_INDEX) || (defined(WINLOCK_LED_LIST) && !defined(WIN_LOCK_LED_PIN))
+#        if defined(NUM_LOCK_INDEX) || defined(CAPS_LOCK_INDEX) || defined(SCROLL_LOCK_INDEX) || defined(COMPOSE_LOCK_INDEX) || defined(KANA_LOCK_INDEX) || (defined(WINLOCK_LED_LIST) && !defined(WIN_LOCK_LED_PIN))
                     && LED_DRIVER_ALLOW_SHUTDOWN()
-#    endif
+#        endif
                 ) {
                     indicator_disable();
                 }
+#    endif
             }
         } else if ((bat_low_ind_state & 0x0F) > (LOW_BAT_LED_BLINK_TIMES)) {
 #    if defined(BAT_LOW_LED_PIN)
