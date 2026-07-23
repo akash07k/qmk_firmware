@@ -22,6 +22,7 @@
 #include "keychron_common.h"
 #include "nvm_via.h"
 #include "via.h"
+#include "wireless.h"
 
 enum layers {
     WIN_BASE,
@@ -33,6 +34,12 @@ enum layers {
 #define FN_PRIMARY MO(WIN_FN)
 #define FN_ALT     MO(WIN_FN_ALT)
 
+enum custom_keycodes {
+    HOLD_BOOTLOADER = SAFE_RANGE,
+    HOLD_CONFIG_RESET,
+    HOLD_FACTORY_RESET,
+};
+
 #define PERSONAL_SCHEMA_MARKER 0x56365001UL
 #define PERSONAL_SCHEMA_ADDRESS (EECONFIG_END_CUSTOM_RGB - sizeof(uint32_t))
 #define FIRST_INSTALL_RESET_DELAY 3500
@@ -41,6 +48,9 @@ enum layers {
 #    error "The reserved RGB EEPROM span is too small for the personal schema marker"
 #endif
 
+static deferred_token bootloader_token          = INVALID_DEFERRED_TOKEN;
+static deferred_token config_reset_token        = INVALID_DEFERRED_TOKEN;
+static deferred_token factory_reset_token       = INVALID_DEFERRED_TOKEN;
 static deferred_token first_install_reset_token = INVALID_DEFERRED_TOKEN;
 
 // clang-format off
@@ -58,7 +68,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         _______,  BT_HST1,  BT_HST2,  BT_HST3,  P2P4G,    _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,   _______,  _______,  _______,   _______,  _______,  _______,  _______,
         KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  KC_NO,    _______,  _______,  _______,  _______,  _______,   _______,  _______,  _______,   _______,  _______,  _______,
         _______,  KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  _______,  _______,  _______,  _______,            _______,                                  _______,  _______,  _______,  _______,
-        _______,            _______,  _______,  _______,  _______,  _______,  _______,  _______,  KC_NO,    KC_NO,    KC_NO,    _______,  _______,           _______,  _______,  _______,
+        _______,            _______,  _______,  _______,  _______,  _______,  _______,  _______,  HOLD_BOOTLOADER, HOLD_CONFIG_RESET, HOLD_FACTORY_RESET, _______, _______,           _______,  _______,  _______,
         _______,  _______,  _______,                                _______,                                _______,  _______,   _______,  _______,   _______,  _______,  _______,  _______,            _______,  _______),
 
     [WIN_BASE_ALT] = LAYOUT_ansi_109(
@@ -74,7 +84,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         _______,  BT_HST1,  BT_HST2,  BT_HST3,  P2P4G,    _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,  _______,   _______,  _______,  _______,   _______,  _______,  _______,  _______,
         KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  KC_NO,    _______,  _______,  _______,  _______,  _______,   _______,  _______,  _______,   _______,  _______,  _______,
         _______,  KC_NO,    KC_NO,    KC_NO,    KC_NO,    KC_NO,    _______,  _______,  _______,  _______,  _______,  _______,            _______,                                  _______,  _______,  _______,  _______,
-        _______,            _______,  _______,  _______,  _______,  _______,  _______,  _______,  KC_NO,    KC_NO,    KC_NO,    _______,  _______,           _______,  _______,  _______,
+        _______,            _______,  _______,  _______,  _______,  _______,  _______,  _______,  HOLD_BOOTLOADER, HOLD_CONFIG_RESET, HOLD_FACTORY_RESET, _______, _______,           _______,  _______,  _______,
         _______,  _______,  _______,                                _______,                                _______,  _______,  _______,   _______,  _______,   _______,  _______,  _______,            _______,  _______)
 };
 
@@ -117,7 +127,29 @@ void via_init_kb(void) {
     }
 }
 
+static void cancel_hold(deferred_token *token) {
+    if (*token != INVALID_DEFERRED_TOKEN) {
+        cancel_deferred_exec(*token);
+        *token = INVALID_DEFERRED_TOKEN;
+    }
+}
+
+static void reset_qmk_via_settings(void) {
+    cancel_hold(&first_install_reset_token);
+    layer_state_t saved_default_layer = default_layer_state;
+
+    clear_keyboard();
+    eeconfig_disable();
+    eeconfig_init();
+    eeconfig_read_keymap(&keymap_config);
+    default_layer_set(saved_default_layer);
+    eeconfig_update_default_layer(saved_default_layer);
+    wireless_config_reset();
+    write_schema_marker();
+}
+
 static void reset_all_settings(void) {
+    cancel_hold(&first_install_reset_token);
     factory_reset();
     write_schema_marker();
 }
@@ -133,4 +165,55 @@ void keyboard_post_init_user(void) {
         // The LKBT51 cannot reliably consume commands immediately after its hardware reset.
         first_install_reset_token = defer_exec(FIRST_INSTALL_RESET_DELAY, reset_first_install, NULL);
     }
+}
+
+static uint32_t enter_bootloader(uint32_t trigger_time, void *cb_arg) {
+    bootloader_token = INVALID_DEFERRED_TOKEN;
+    reset_keyboard();
+    return 0;
+}
+
+static uint32_t reset_configuration(uint32_t trigger_time, void *cb_arg) {
+    config_reset_token = INVALID_DEFERRED_TOKEN;
+    reset_qmk_via_settings();
+    return 0;
+}
+
+static uint32_t reset_factory(uint32_t trigger_time, void *cb_arg) {
+    factory_reset_token = INVALID_DEFERRED_TOKEN;
+    reset_all_settings();
+    return 0;
+}
+
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    switch (keycode) {
+        case HOLD_BOOTLOADER:
+            if (record->event.pressed) {
+                cancel_hold(&bootloader_token);
+                bootloader_token = defer_exec(2000, enter_bootloader, NULL);
+            } else {
+                cancel_hold(&bootloader_token);
+            }
+            return false;
+
+        case HOLD_CONFIG_RESET:
+            if (record->event.pressed) {
+                cancel_hold(&config_reset_token);
+                config_reset_token = defer_exec(3000, reset_configuration, NULL);
+            } else {
+                cancel_hold(&config_reset_token);
+            }
+            return false;
+
+        case HOLD_FACTORY_RESET:
+            if (record->event.pressed) {
+                cancel_hold(&factory_reset_token);
+                factory_reset_token = defer_exec(3000, reset_factory, NULL);
+            } else {
+                cancel_hold(&factory_reset_token);
+            }
+            return false;
+    }
+
+    return true;
 }
