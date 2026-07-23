@@ -113,6 +113,7 @@ void wireless_post_task(void);
 void send_string_task(void);
 
 wt_state_t wireless_get_state(void);
+uint8_t    wireless_get_host_index(void);
 
 void wireless_low_battery_shutdown(void);
 
