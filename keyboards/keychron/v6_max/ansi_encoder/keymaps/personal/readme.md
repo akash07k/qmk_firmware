@@ -161,8 +161,10 @@ layout.
 - The physical Fn key is Application/Menu.
 - The Cortana key is Sleep.
 - The stock `UG_NEXT` position is Pause.
-- The former F14 key is media Rewind.
-- The former F15 key is media Fast Forward.
+- The former F14 key selects the previous media track when tapped and rewinds
+  while held for at least 500 milliseconds.
+- The former F15 key selects the next media track when tapped and fast-forwards
+  while held for at least 500 milliseconds.
 - The former F16 key is media Play/Pause.
 - Turning the encoder changes volume on the base layers.
 - The encoder does nothing while Fn is held.
@@ -187,6 +189,9 @@ The Fn key is the physical key that was Right Windows in the stock layout.
 
 The function row provides brightness, task view, File Explorer, media, and
 volume controls. Stock RGB-related Fn shortcuts are disabled.
+
+Rewind and fast-forward use standard consumer-control commands. Whether holding
+them seeks continuously depends on the Windows application handling playback.
 
 The held bootloader and reset actions execute silently when their thresholds
 are reached. Releasing either key early cancels the action.

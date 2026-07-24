@@ -41,6 +41,8 @@ enum layers {
 
 enum custom_keycodes {
     STATUS_REPORT = SAFE_RANGE,
+    MEDIA_PREV_SEEK,
+    MEDIA_NEXT_SEEK,
     HOLD_BOOTLOADER,
     HOLD_CONFIG_RESET,
     HOLD_FACTORY_RESET,
@@ -49,6 +51,7 @@ enum custom_keycodes {
 #define PERSONAL_SCHEMA_MARKER 0x56365001UL
 #define PERSONAL_SCHEMA_ADDRESS (EECONFIG_END_CUSTOM_RGB - sizeof(uint32_t))
 #define FIRST_INSTALL_RESET_DELAY 3500
+#define MEDIA_SEEK_HOLD_DELAY 500
 
 #if KEYCHRON_RGB_EEPROM_COMPAT_SIZE < 4
 #    error "The reserved RGB EEPROM span is too small for the personal schema marker"
@@ -59,10 +62,20 @@ static deferred_token config_reset_token = INVALID_DEFERRED_TOKEN;
 static deferred_token factory_reset_token = INVALID_DEFERRED_TOKEN;
 static deferred_token first_install_reset_token = INVALID_DEFERRED_TOKEN;
 
+typedef struct {
+    deferred_token token;
+    uint16_t tap_keycode;
+    uint16_t hold_keycode;
+    bool active;
+} media_seek_state_t;
+
+static media_seek_state_t media_prev_state = {INVALID_DEFERRED_TOKEN, KC_MPRV, KC_MRWD, false};
+static media_seek_state_t media_next_state = {INVALID_DEFERRED_TOKEN, KC_MNXT, KC_MFFD, false};
+
 // clang-format off
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [WIN_BASE] = LAYOUT_ansi_109(
-        KC_ESC,   KC_F1,    KC_F2,    KC_F3,    KC_F4,    KC_F5,    KC_F6,    KC_F7,    KC_F8,    KC_F9,    KC_F10,   KC_F11,   KC_F12,   KC_MUTE,   KC_PSCR,  KC_SLEP,  KC_PAUS,   KC_F13,   KC_MRWD,  KC_MFFD,  KC_MPLY,
+        KC_ESC,   KC_F1,    KC_F2,    KC_F3,    KC_F4,    KC_F5,    KC_F6,    KC_F7,    KC_F8,    KC_F9,    KC_F10,   KC_F11,   KC_F12,   KC_MUTE,   KC_PSCR,  KC_SLEP,  KC_PAUS,   KC_F13,   MEDIA_PREV_SEEK, MEDIA_NEXT_SEEK, KC_MPLY,
         KC_GRV,   KC_1,     KC_2,     KC_3,     KC_4,     KC_5,     KC_6,     KC_7,     KC_8,     KC_9,     KC_0,     KC_MINS,  KC_EQL,   KC_BSPC,   KC_INS,   KC_HOME,  KC_PGUP,   KC_NUM,   KC_PSLS,  KC_PAST,  KC_PMNS,
         KC_TAB,   KC_Q,     KC_W,     KC_E,     KC_R,     KC_T,     KC_Y,     KC_U,     KC_I,     KC_O,     KC_P,     KC_LBRC,  KC_RBRC,  KC_BSLS,   KC_DEL,   KC_END,   KC_PGDN,   KC_P7,    KC_P8,    KC_P9,
         KC_CAPS,  KC_A,     KC_S,     KC_D,     KC_F,     KC_G,     KC_H,     KC_J,     KC_K,     KC_L,     KC_SCLN,  KC_QUOT,            KC_ENT,                                   KC_P4,    KC_P5,    KC_P6,    KC_PPLS,
@@ -78,7 +91,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         _______,  _______,  _______,                                _______,                                _______,  _______,   _______,  _______,   _______,  _______,  _______,  _______,            _______,  _______),
 
     [WIN_BASE_ALT] = LAYOUT_ansi_109(
-        KC_ESC,   KC_F1,    KC_F2,    KC_F3,    KC_F4,    KC_F5,    KC_F6,    KC_F7,    KC_F8,    KC_F9,    KC_F10,   KC_F11,   KC_F12,   KC_MUTE,   KC_PSCR,  KC_SLEP,  KC_PAUS,   KC_F13,   KC_MRWD,  KC_MFFD,  KC_MPLY,
+        KC_ESC,   KC_F1,    KC_F2,    KC_F3,    KC_F4,    KC_F5,    KC_F6,    KC_F7,    KC_F8,    KC_F9,    KC_F10,   KC_F11,   KC_F12,   KC_MUTE,   KC_PSCR,  KC_SLEP,  KC_PAUS,   KC_F13,   MEDIA_PREV_SEEK, MEDIA_NEXT_SEEK, KC_MPLY,
         KC_GRV,   KC_1,     KC_2,     KC_3,     KC_4,     KC_5,     KC_6,     KC_7,     KC_8,     KC_9,     KC_0,     KC_MINS,  KC_EQL,   KC_BSPC,   KC_INS,   KC_HOME,  KC_PGUP,   KC_NUM,   KC_PSLS,  KC_PAST,  KC_PMNS,
         KC_TAB,   KC_Q,     KC_W,     KC_E,     KC_R,     KC_T,     KC_Y,     KC_U,     KC_I,     KC_O,     KC_P,     KC_LBRC,  KC_RBRC,  KC_BSLS,   KC_DEL,   KC_END,   KC_PGDN,   KC_P7,    KC_P8,    KC_P9,
         KC_CAPS,  KC_A,     KC_S,     KC_D,     KC_F,     KC_G,     KC_H,     KC_J,     KC_K,     KC_L,     KC_SCLN,  KC_QUOT,            KC_ENT,                                   KC_P4,    KC_P5,    KC_P6,    KC_PPLS,
@@ -245,6 +258,29 @@ static uint32_t reset_factory(uint32_t trigger_time, void *cb_arg) {
     return 0;
 }
 
+static uint32_t start_media_seek(uint32_t trigger_time, void *cb_arg) {
+    media_seek_state_t *state = cb_arg;
+    state->token              = INVALID_DEFERRED_TOKEN;
+    state->active             = true;
+    register_code16(state->hold_keycode);
+    return 0;
+}
+
+static void process_media_seek(media_seek_state_t *state, bool pressed) {
+    if (pressed) {
+        cancel_hold(&state->token);
+        state->token = defer_exec(MEDIA_SEEK_HOLD_DELAY, start_media_seek, state);
+    } else if (state->token != INVALID_DEFERRED_TOKEN) {
+        cancel_hold(&state->token);
+        tap_code16(state->tap_keycode);
+    } else if (state->active) {
+        unregister_code16(state->hold_keycode);
+        state->active = false;
+    } else {
+        tap_code16(state->tap_keycode);
+    }
+}
+
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     switch (keycode) {
         case BT_HST1 ... BT_HST3:
@@ -263,6 +299,14 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             if (record->event.pressed) {
                 send_status_report();
             }
+            return false;
+
+        case MEDIA_PREV_SEEK:
+            process_media_seek(&media_prev_state, record->event.pressed);
+            return false;
+
+        case MEDIA_NEXT_SEEK:
+            process_media_seek(&media_next_state, record->event.pressed);
             return false;
 
         case HOLD_BOOTLOADER:
